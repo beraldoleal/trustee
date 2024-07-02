@@ -1,6 +1,6 @@
 project(
   'sgx_dcap_quoteverify_stubs', 'cpp',
-  default_options: ['warning_level=everything'],
+  default_options: ['warning_level=2'],
 )
 
 stub_headers = files([
