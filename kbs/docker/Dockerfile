@@ -38,7 +38,7 @@ COPY . .
 
 RUN cargo install --locked --path kbs/src/kbs --no-default-features --features coco-as-builtin,resource,opa,${HTTPS_CRYPTO}
 
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 ARG ARCH=x86_64
 
 WORKDIR /tmp
