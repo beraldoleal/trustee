@@ -10,7 +10,7 @@ RUN apt-get update && apt install -y protobuf-compiler git
 # Build and Install KBS
 RUN cargo install --path kbs/src/kbs --no-default-features --features coco-as-grpc,resource,opa,${HTTPS_CRYPTO}
 
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 LABEL org.opencontainers.image.source="https://github.com/confidential-containers/trustee/kbs"
 
