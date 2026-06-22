@@ -12,9 +12,38 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE, Engine};
 use serde::Deserialize;
 use tokio::sync::RwLock;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 use crate::{KeyValueStorage, KeyValueStorageError, Result, SetParameters, SetResult};
+
+/// Parse file contents into a HashMap, accepting both the current key-value
+/// format (`{"key": "base64"}`) and the legacy array format used before the
+/// kv-storage migration (`[{"name": "key", ...}, ...]`).
+///
+/// When the legacy format is detected, each array entry is serialized back to
+/// JSON bytes and base64-encoded, matching what `set()` would produce.
+fn parse_items(data: &[u8]) -> std::result::Result<HashMap<String, String>, serde_json::Error> {
+    let json: serde_json::Value = serde_json::from_slice(data)?;
+
+    if let Some(items) = json.as_array() {
+        warn!(
+            "detected DEPRECATED legacy RVPS array format, converting in memory. \
+             Please update your reference values ConfigMap to the new key-value \
+             format. Support for the legacy array format will be removed in a \
+             future release."
+        );
+        let mut map = HashMap::new();
+        for item in items {
+            if let Some(name) = item.get("name").and_then(|v| v.as_str()) {
+                let entry_bytes = serde_json::to_vec(item)?;
+                map.insert(name.to_string(), URL_SAFE.encode(&entry_bytes));
+            }
+        }
+        return Ok(map);
+    }
+
+    serde_json::from_value(json)
+}
 
 /// Default file directory path for the local JSON file.
 const FILE_DIR_PATH: &str = "/opt/confidential-containers/storage/local_json";
@@ -78,8 +107,10 @@ impl KeyValueStorage for LocalJson {
                 key: key.to_string(),
             }
         })?;
-        let mut items: HashMap<String, String> = serde_json::from_slice(&file)
-            .map_err(|e| KeyValueStorageError::MalformedValue { source: e.into() })?;
+        let mut items: HashMap<String, String> =
+            parse_items(&file).map_err(|e| KeyValueStorageError::MalformedValue {
+                source: e.into(),
+            })?;
         let value_b64 = URL_SAFE.encode(value);
         if !parameters.overwrite && items.contains_key(key) {
             return Ok(SetResult::AlreadyExists);
@@ -111,7 +142,7 @@ impl KeyValueStorage for LocalJson {
             }
         })?;
         let items: HashMap<String, String> =
-            serde_json::from_slice(&file).map_err(|e| KeyValueStorageError::MalformedValue {
+            parse_items(&file).map_err(|e| KeyValueStorageError::MalformedValue {
                 source: anyhow::anyhow!("failed to deserialize the file: {}", e),
             })?;
         let value = items
@@ -133,7 +164,7 @@ impl KeyValueStorage for LocalJson {
             }
         })?;
         let items: HashMap<String, String> =
-            serde_json::from_slice(&file).map_err(|e| KeyValueStorageError::ListKeysFailed {
+            parse_items(&file).map_err(|e| KeyValueStorageError::ListKeysFailed {
                 source: anyhow::anyhow!("failed to deserialize the file: {}", e),
             })?;
         let keys = items.keys().cloned().collect();
@@ -150,7 +181,7 @@ impl KeyValueStorage for LocalJson {
             }
         })?;
         let mut items: HashMap<String, String> =
-            serde_json::from_slice(&file).map_err(|e| KeyValueStorageError::DeleteKeyFailed {
+            parse_items(&file).map_err(|e| KeyValueStorageError::DeleteKeyFailed {
                 key: key.to_string(),
                 source: anyhow::anyhow!("failed to deserialize the file: {}", e),
             })?;
@@ -220,6 +251,92 @@ mod tests {
         assert_eq!(res, SetResult::Inserted);
         let value = storage.get("key").await.unwrap().unwrap();
         assert_eq!(value, b"updated");
+    }
+
+    #[tokio::test]
+    async fn test_legacy_array_get() {
+        let work_dir = tempfile::tempdir().unwrap();
+        let legacy_json = r#"[
+            {
+                "name": "se.measurement_0",
+                "version": "0.1.0",
+                "expiration": "2027-06-12T00:00:00Z",
+                "value": ["abc123"]
+            },
+            {
+                "name": "se.measurement_1",
+                "version": "0.1.0",
+                "expiration": "2027-06-12T00:00:00Z",
+                "value": ["def456"]
+            }
+        ]"#;
+        let file_path = work_dir.path().join("reference_value");
+        std::fs::write(&file_path, legacy_json).unwrap();
+
+        let config = Config {
+            file_dir_path: work_dir.path().to_string_lossy().to_string(),
+        };
+        let storage = LocalJson::new(config, "reference_value").unwrap();
+
+        let val = storage.get("se.measurement_0").await.unwrap().unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&val).unwrap();
+        assert_eq!(parsed["name"], "se.measurement_0");
+        assert_eq!(parsed["value"], serde_json::json!(["abc123"]));
+
+        let val = storage.get("se.measurement_1").await.unwrap().unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&val).unwrap();
+        assert_eq!(parsed["name"], "se.measurement_1");
+    }
+
+    #[tokio::test]
+    async fn test_legacy_array_list() {
+        let work_dir = tempfile::tempdir().unwrap();
+        let legacy_json = r#"[
+            {"name": "a", "version": "0.1.0", "expiration": "2027-01-01T00:00:00Z", "value": "x"},
+            {"name": "b", "version": "0.1.0", "expiration": "2027-01-01T00:00:00Z", "value": "y"}
+        ]"#;
+        let file_path = work_dir.path().join("reference_value");
+        std::fs::write(&file_path, legacy_json).unwrap();
+
+        let config = Config {
+            file_dir_path: work_dir.path().to_string_lossy().to_string(),
+        };
+        let storage = LocalJson::new(config, "reference_value").unwrap();
+
+        let mut keys = storage.list().await.unwrap();
+        keys.sort();
+        assert_eq!(keys, vec!["a", "b"]);
+    }
+
+    #[tokio::test]
+    async fn test_legacy_empty_array() {
+        let work_dir = tempfile::tempdir().unwrap();
+        let file_path = work_dir.path().join("reference_value");
+        std::fs::write(&file_path, "[]").unwrap();
+
+        let config = Config {
+            file_dir_path: work_dir.path().to_string_lossy().to_string(),
+        };
+        let storage = LocalJson::new(config, "reference_value").unwrap();
+
+        let keys = storage.list().await.unwrap();
+        assert!(keys.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_new_format_untouched() {
+        let work_dir = tempfile::tempdir().unwrap();
+        let new_format = r#"{"some_key":"dGVzdA=="}"#;
+        let file_path = work_dir.path().join("reference_value");
+        std::fs::write(&file_path, new_format).unwrap();
+
+        let config = Config {
+            file_dir_path: work_dir.path().to_string_lossy().to_string(),
+        };
+        let storage = LocalJson::new(config, "reference_value").unwrap();
+
+        let val = storage.get("some_key").await.unwrap().unwrap();
+        assert_eq!(val, b"test");
     }
 
     #[tokio::test]
