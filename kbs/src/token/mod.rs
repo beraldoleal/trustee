@@ -60,6 +60,11 @@ pub struct AttestationTokenVerifierConfig {
     /// Default: false
     #[serde(default = "bool::default")]
     pub insecure_header_jwk: bool,
+
+    /// Deprecated: use `insecure_header_jwk` instead. This field will be
+    /// removed in a future release.
+    #[serde(default)]
+    insecure_key: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -76,11 +81,22 @@ impl TokenVerifier {
     }
 
     pub async fn from_config(config: AttestationTokenVerifierConfig) -> Result<Self> {
+        let insecure = if let Some(legacy) = config.insecure_key {
+            tracing::warn!(
+                "config field 'insecure_key' is DEPRECATED, use \
+                 'insecure_header_jwk' instead. Support for the old \
+                 name will be removed in a future release."
+            );
+            legacy || config.insecure_header_jwk
+        } else {
+            config.insecure_header_jwk
+        };
+
         let verifier = JwtVerifier::new(
             &config.trusted_jwk_sets,
             &config.trusted_certs_paths,
             &Vec::new(),
-            config.insecure_header_jwk,
+            insecure,
         )
         .await
         .map_err(|e| Error::TokenVerifierInitialization { source: e })?;
