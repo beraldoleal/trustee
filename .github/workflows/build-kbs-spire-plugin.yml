@@ -1,0 +1,58 @@
+name: Build KBS with SPIRE Plugin (fork)
+
+# Builds the KBS image with the SPIRE Delegated Identity Plugin enabled
+# and pushes to ghcr.io/<fork-owner>/trustee/kbs:spire-plugin
+# This workflow is specific to the spire-plugin branch in beraldoleal/trustee.
+
+on:
+  push:
+    branches:
+      - spire-plugin
+    paths-ignore:
+      - '**/*.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-kbs-spire-plugin:
+    name: Build and push KBS (SPIRE plugin)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push KBS image with SPIRE plugin
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: kbs/docker/Dockerfile
+          push: true
+          platforms: linux/amd64
+          # SPIRE plugin requires EXTERNAL_PLUGIN=true (default) and
+          # the spire-plugin Cargo feature enabled (set in Makefile by PR #1581)
+          build-args: |
+            ARCH=x86_64
+            EXTERNAL_PLUGIN=true
+            VAULT=true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/trustee/kbs:spire-plugin
+            ghcr.io/${{ github.repository_owner }}/trustee/kbs:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.repositoryUrl }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.description=KBS with SPIRE Delegated Identity Plugin (PR #1581)
