@@ -1,0 +1,37 @@
+name: Build kbs-client with sample attester
+
+# Builds kbs-client with sample-attester feature for testing the SPIRE plugin
+# without real hardware. Uploads as artifact.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-kbs-client:
+    name: Build kbs-client (sample attester)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler libssl-dev pkg-config
+
+      - name: Build kbs-client with sample attester
+        run: |
+          cargo build --release \
+            -p kbs-client \
+            --features sample-attester \
+            --no-default-features
+
+      - name: Upload kbs-client binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: kbs-client-sample-attester-amd64
+          path: target/release/kbs-client
+          retention-days: 7
