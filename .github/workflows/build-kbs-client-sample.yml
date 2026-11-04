@@ -1,0 +1,28 @@
+name: Build kbs-client with sample attester
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-kbs-client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: spire-plugin
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: sudo apt-get install -y protobuf-compiler libssl-dev pkg-config
+
+      - name: Build kbs-client
+        run: |
+          cargo build --release -p kbs-client \
+            --features sample-attester --no-default-features
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kbs-client-sample-amd64
+          path: target/release/kbs-client
+          retention-days: 7
