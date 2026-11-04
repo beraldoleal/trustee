@@ -16,10 +16,9 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get install -y protobuf-compiler libssl-dev pkg-config
 
-      - name: Build kbs-client
-        run: |
-          cargo build --release -p kbs-client \
-            --features sample-attester --no-default-features
+      - name: Build kbs-client (sample_only - no real TEE needed)
+        working-directory: kbs
+        run: make CLI_FEATURES=sample_only build-clis
 
       - uses: actions/upload-artifact@v4
         with:
